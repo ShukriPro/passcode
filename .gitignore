@@ -38,6 +38,10 @@ yarn-error.*
 
 app-example
 
+# local docs (do not commit)
+SKILL.md
+DESIGN.md
+
 # generated native folders
 /ios
 /android
