@@ -13,7 +13,6 @@ Features:
 
 ### iOS
 - Face ID
-- Touch ID
 
 ### Android
 - Fingerprint

@@ -5,7 +5,7 @@ import * as LocalAuthentication from 'expo-local-authentication';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 
-const PASSCODE_KEY = 'passcode_4digit_v1';
+const PASSCODE_KEY = 'passcode';
 const RELock_AFTER_SECONDS = 30;
 
 const KEYS = [
@@ -34,13 +34,18 @@ export default function PasscodeScreen() {
   const [locked, setLocked] = useState(false);
   const [message, setMessage] = useState('');
   const [pressing, setPressing] = useState<string | null>(null);
+  const [failedAttempts, setFailedAttempts] = useState(0);
 
   const [unlocked, setUnlocked] = useState(false);
   const [storedPasscode, setStoredPasscode] = useState<string | null>(null);
+  const [pendingPasscode, setPendingPasscode] = useState<string | null>(null);
   const [biometricSupported, setBiometricSupported] = useState(false);
   const [bioInFlight, setBioInFlight] = useState(false);
 
-  const mode = useMemo<'create' | 'enter'>(() => (storedPasscode ? 'enter' : 'create'), [storedPasscode]);
+  const mode = useMemo<'create' | 'confirm' | 'enter'>(() => {
+    if (storedPasscode) return 'enter';
+    return pendingPasscode ? 'confirm' : 'create';
+  }, [pendingPasscode, storedPasscode]);
 
   const reset = useCallback(() => {
     setInput('');
@@ -71,6 +76,7 @@ export default function PasscodeScreen() {
     (async () => {
       try {
         const code = await AsyncStorage.getItem(PASSCODE_KEY);
+        console.log('passcode:', code);
         if (!mounted) return;
         setStoredPasscode(code);
       } catch {
@@ -173,9 +179,28 @@ export default function PasscodeScreen() {
 
   const check = useCallback(async (code: string) => {
     if (mode === 'create') {
+      setPendingPasscode(code);
+      setInput('');
+      setMessage('');
+      return;
+    }
+
+    if (mode === 'confirm') {
+      if (code !== pendingPasscode) {
+        setStatus('error');
+        setMessage('Passcodes do not match');
+        setLocked(true);
+        setPendingPasscode(null);
+        if (Platform.OS !== 'web') Vibration.vibrate([0, 50, 50, 50]);
+        setTimeout(reset, 1000);
+        return;
+      }
+
       try {
         await AsyncStorage.setItem(PASSCODE_KEY, code);
+        console.log('passcode:', code);
         setStoredPasscode(code);
+        setPendingPasscode(null);
         doUnlock('Passcode set');
       } catch {
         setStatus('error');
@@ -188,15 +213,17 @@ export default function PasscodeScreen() {
     }
 
     if (code === storedPasscode) {
+      setFailedAttempts(0);
       doUnlock('Unlocked');
     } else {
+      setFailedAttempts(prev => prev + 1);
       setStatus('error');
       setMessage('Incorrect passcode');
       setLocked(true);
       if (Platform.OS !== 'web') Vibration.vibrate([0, 50, 50, 50]);
       setTimeout(reset, 1000);
     }
-  }, [doUnlock, mode, reset, storedPasscode]);
+  }, [doUnlock, mode, pendingPasscode, reset, storedPasscode]);
 
   const press = useCallback((n: string) => {
     if (locked) return;
@@ -222,6 +249,30 @@ export default function PasscodeScreen() {
     press(key);
   };
 
+  const resetPasscode = useCallback(async () => {
+    try {
+      await AsyncStorage.removeItem(PASSCODE_KEY);
+      console.log('passcode:', null);
+    } catch {
+      // ignore (local state still returns the user to create mode)
+    }
+    setStoredPasscode(null);
+    setPendingPasscode(null);
+    setFailedAttempts(0);
+    reset();
+  }, [reset]);
+
+  const handleForgotPin = useCallback(() => {
+    Alert.alert(
+      'Reset Passcode',
+      'Are you sure you want to reset your passcode?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Reset', style: 'destructive', onPress: () => void resetPasscode() },
+      ]
+    );
+  }, [resetPasscode]);
+
   const dotColor = (i: number) => {
     if (status === 'error') return '#E24B4A';
     if (status === 'success') return '#639922';
@@ -232,6 +283,13 @@ export default function PasscodeScreen() {
     if (status === 'error') return '#E24B4A';
     if (status === 'success') return '#639922';
     return i < input.length ? '#1a1a1a' : '#bbb';
+  };
+
+  const labelColor = () => {
+    if (status === 'success') return '#639922';
+    if (status === 'error') return '#E24B4A';
+    if (mode === 'create') return '#007AFF';
+    return '#888';
   };
 
   if (unlocked) {
@@ -249,7 +307,9 @@ export default function PasscodeScreen() {
         />
       </View>
 
-      <Text style={styles.label}>{mode === 'create' ? 'Create Passcode' : 'Enter Passcode'}</Text>
+      <Text style={[styles.label, { color: labelColor() }]}>
+        {mode === 'create' ? 'Create Passcode' : mode === 'confirm' ? 'Confirm Passcode' : 'Enter Security PIN'}
+      </Text>
 
       {/* Dots */}
       <View style={styles.dotsRow}>
@@ -261,14 +321,17 @@ export default function PasscodeScreen() {
         ))}
       </View>
 
-      {/* Message */}
-      <Text style={[
-        styles.message,
-        status === 'error' && styles.messageError,
-        status === 'success' && styles.messageSuccess,
-      ]}>
-        {message || ' '}
-      </Text>
+      <View style={styles.messageWrap}>
+        {message ? (
+          <Text style={[
+            styles.message,
+            status === 'error' && styles.messageError,
+            status === 'success' && styles.messageSuccess,
+          ]}>
+            {message}
+          </Text>
+        ) : null}
+      </View>
 
       {/* Keypad */}
       <View style={styles.grid}>
@@ -300,6 +363,12 @@ export default function PasscodeScreen() {
           );
         })}
       </View>
+
+      {failedAttempts >= 3 ? (
+        <TouchableOpacity onPress={handleForgotPin} activeOpacity={0.7}>
+          <Text style={styles.forgotPin}>Forget My PIN :(</Text>
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 }
@@ -322,13 +391,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 2,
     textTransform: 'uppercase',
-    color: '#888',
-    marginBottom: 24,
+    marginBottom: 30,
   },
   dotsRow: {
     flexDirection: 'row',
     gap: 14,
-    marginBottom: 12,
+    marginBottom: 22,
   },
   dot: {
     width: 14,
@@ -336,14 +404,17 @@ const styles = StyleSheet.create({
     borderRadius: 7,
     borderWidth: 1.5,
   },
+  messageWrap: {
+    height: 18,
+    marginBottom: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   message: {
     fontSize: 12,
     fontWeight: '700',
     letterSpacing: 1.5,
     textTransform: 'uppercase',
-    color: 'transparent',
-    height: 18,
-    marginBottom: 24,
   },
   messageError: {
     color: '#A32D2D',
@@ -393,5 +464,12 @@ const styles = StyleSheet.create({
   keySpecialText: {
     fontSize: 20,
     color: '#888',
+  },
+  forgotPin: {
+    marginTop: 18,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#007AFF',
+    textDecorationLine: 'underline',
   },
 });
